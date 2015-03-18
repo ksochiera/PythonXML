@@ -13,4 +13,4 @@ for i in range(len(parzyste)):
   lat.text=repr(parzyste[i]) 
   lng=SubElement(point,'longitude') 
   lng.text=repr(nparzyste[i]) 
-  print tostring(root)
+print tostring(root)
