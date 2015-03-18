@@ -1,0 +1,18 @@
+# PythonXML
+from xml.etree.ElementTree import Element,SubElement, Comment, tostring
+data=[1.42, 2.98, 3.91, 5.27, 4.33, 7.2, 0.14, 12.11 ]
+coord=[]
+parzyste=[]
+nparzyste=[]
+for i in range(0,len(data)+1/2,2):
+    parzyste.append(data[i])
+    nparzyste.append(data[i+1])
+
+root=Element("Polygon")
+for i in range(len(parzyste)):
+    point=SubElement(root,'Punkt'+str(i))
+    lat=SubElement(point,'latitude')
+    lat.text=repr(parzyste[i])
+    lng=SubElement(point,'longitude')
+    lng.text=repr(nparzyste[i])
+print tostring(root)
