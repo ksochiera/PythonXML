@@ -1,0 +1,376 @@
+# -*- coding: utf-8 -*-
+"""
+/***************************************************************************
+ Dodajpunt
+                                 A QGIS plugin
+ Dodaje punkt do warstwy
+                              -------------------
+        begin                : 2015-03-24
+        git sha              : $Format:%H$
+        copyright            : (C) 2015 by Wrogeo
+        email                : wro@geo.pl
+ ***************************************************************************/
+
+/***************************************************************************
+ *                                                                         *
+ *   This program is free software; you can redistribute it and/or modify  *
+ *   it under the terms of the GNU General Public License as published by  *
+ *   the Free Software Foundation; either version 2 of the License, or     *
+ *   (at your option) any later version.                                   *
+ *                                                                         *
+ ***************************************************************************/
+"""
+from PyQt4.QtCore import *
+from PyQt4.QtGui import *
+# Initialize Qt resources from file resources.py
+import resources_rc
+# Import the code for the dialog
+from dodaj_punkt_dialog import DodajpuntDialog
+import os.path
+from qgis.core import *
+from qgis.gui import *
+from qgis.utils import *
+import os
+from xml.etree.ElementTree import Element,SubElement, Comment, tostring
+#import xml.dom.minidom
+#import simplekml
+from pprint import pprint
+
+class Dodajpunt:
+    """QGIS Plugin Implementation."""
+
+    def __init__(self, iface):
+        """Constructor.
+
+        :param iface: An interface instance that will be passed to this class
+            which provides the hook by which you can manipulate the QGIS
+            application at run time.
+        :type iface: QgsInterface
+        """
+        # Save reference to the QGIS interface
+        self.iface = iface
+        # initialize plugin directory
+        self.plugin_dir = os.path.dirname(__file__)
+        # initialize locale
+        locale = QSettings().value('locale/userLocale')[0:2]
+        locale_path = os.path.join(
+            self.plugin_dir,
+            'i18n',
+            'Dodajpunt_{}.qm'.format(locale))
+
+        if os.path.exists(locale_path):
+            self.translator = QTranslator()
+            self.translator.load(locale_path)
+
+            if qVersion() > '4.3.3':
+                QCoreApplication.installTranslator(self.translator)
+
+        # Create the dialog (after translation) and keep reference
+        self.dlg = DodajpuntDialog()
+
+        # Declare instance attributes
+        self.actions = []
+        self.menu = self.tr(u'&Dodaj punkt')
+        # TODO: We are going to let the user set this up in a future iteration
+        self.toolbar = self.iface.addToolBar(u'Dodajpunt')
+        self.toolbar.setObjectName(u'Dodajpunt')
+        #Set the signals
+        self.canvas=self.iface.mapCanvas()
+        self.clickTool=QgsMapToolEmitPoint(self.canvas)
+##        self.insertLayer()
+##        print "wartstwa dodana"
+
+    # noinspection PyMethodMayBeStatic
+    def tr(self, message):
+        """Get the translation for a string using Qt translation API.
+
+        We implement this ourselves since we do not inherit QObject.
+
+        :param message: String for translation.
+        :type message: str, QString
+
+        :returns: Translated version of message.
+        :rtype: QString
+        """
+        # noinspection PyTypeChecker,PyArgumentList,PyCallByClass
+        return QCoreApplication.translate('Dodajpunt', message)
+
+
+    def add_action(
+        self,
+        icon_path,
+        text,
+        callback,
+        enabled_flag=True,
+        add_to_menu=True,
+        add_to_toolbar=True,
+        status_tip=None,
+        whats_this=None,
+        parent=None):
+        """Add a toolbar icon to the toolbar.
+
+        :param icon_path: Path to the icon for this action. Can be a resource
+            path (e.g. ':/plugins/foo/bar.png') or a normal file system path.
+        :type icon_path: str
+
+        :param text: Text that should be shown in menu items for this action.
+        :type text: str
+
+        :param callback: Function to be called when the action is triggered.
+        :type callback: function
+
+        :param enabled_flag: A flag indicating if the action should be enabled
+            by default. Defaults to True.
+        :type enabled_flag: bool
+
+        :param add_to_menu: Flag indicating whether the action should also
+            be added to the menu. Defaults to True.
+        :type add_to_menu: bool
+
+        :param add_to_toolbar: Flag indicating whether the action should also
+            be added to the toolbar. Defaults to True.
+        :type add_to_toolbar: bool
+
+        :param status_tip: Optional text to show in a popup when mouse pointer
+            hovers over the action.
+        :type status_tip: str
+
+        :param parent: Parent widget for the new action. Defaults None.
+        :type parent: QWidget
+
+        :param whats_this: Optional text to show in the status bar when the
+            mouse pointer hovers over the action.
+
+        :returns: The action that was created. Note that the action is also
+            added to self.actions list.
+        :rtype: QAction
+        """
+
+        icon = QIcon(icon_path)
+        action = QAction(icon, text, parent)
+        action.triggered.connect(callback)
+        action.setEnabled(enabled_flag)
+
+        if status_tip is not None:
+            action.setStatusTip(status_tip)
+
+        if whats_this is not None:
+            action.setWhatsThis(whats_this)
+
+        if add_to_toolbar:
+            self.toolbar.addAction(action)
+
+        if add_to_menu:
+            self.iface.addPluginToMenu(
+                self.menu,
+                action)
+
+        self.actions.append(action)
+
+        return action
+
+    def initGui(self):
+        """Create the menu entries and toolbar icons inside the QGIS GUI."""
+
+        icon_path = ':/plugins/Dodajpunt/icon.png'
+        self.add_action(
+            icon_path,
+            text=self.tr(u'Dodaje punkt do warstwy'),
+            callback=self.run,
+            parent=self.iface.mainWindow())
+        result=QObject.connect(self.clickTool,SIGNAL("canvasClicked(const QgsPoint &,Qt::MouseButton)"),self.handleMouseDown)
+        dpunkt=self.dlg.pushButton
+        dpunkt.clicked.connect(self.insertPoint)
+        addlayer=self.dlg.pushButton_3
+        addlayer.clicked.connect(self.insertLayer)
+        addcolumn=self.dlg.pushButton_2
+        addcolumn.clicked.connect(self.addColumns)
+        export2files=self.dlg.pushButton_4
+        export2files.clicked.connect(self.export2file)
+        #QMessageBox.information(self.iface.mainWindow(),"Info","connect=%s"%str(result))
+    def handleMouseDown(self,point,button):
+        self.lex=self.dlg.lineEdit
+        self.ley=self.dlg.lineEdit_2
+        self.lex.clear()
+        self.ley.clear()
+        QMessageBox.information(self.iface.mainWindow(),"Info","X,Y=%s, %s"%(str(point.x()),str(point.y())))
+        self.lex.setText('%s'%(str(point.x())))
+        self.ley.setText('%s'%(str(point.y())))
+    def insertPoint(self,point):
+        #Declare variable/scopes
+        a1=self.dlg.lineEdit_3.text()
+        a2=self.dlg.lineEdit_4.text()
+        a3=self.dlg.lineEdit_5.text()
+        a4=self.dlg.lineEdit_6.text()
+        geom=QgsPoint(float(self.lex.text()),float(self.ley.text()))
+        #Commit action
+        alayer=iface.activeLayer()
+        alayer.startEditing()
+        punkt=QgsFeature()
+        punkt.setGeometry(QgsGeometry.fromPoint(geom))
+        atributtes=[a1,a2,a3,a4,None,None, None]
+        punkt.setAttributes(atributtes)
+        alayer.addFeature(punkt,True)
+        alayer.commitChanges()
+        QMessageBox.information(self.iface.mainWindow(),"Informacja","Dodano punkt")
+        self.fillFields()
+        iface.mapCanvas().refresh()
+    def insertLayer(self):
+        layer=QgsVectorLayer("Point?crs=epsg:4326","Punkty","memory")
+	layer.startEditing()
+	layer.LayerData=layer.dataProvider()
+	layer.LayerData.addAttributes([QgsField("Atrybut1", QVariant.String), QgsField("Atrybut2", QVariant.String), QgsField("Atrybut3", QVariant.String), QgsField("Atrybut4", QVariant.String),QgsField("Tekst", QVariant.String), QgsField("Foto", QVariant.String), QgsField("Count", QVariant.String)])#
+	layer.commitChanges()
+        QgsMapLayerRegistry.instance().addMapLayer(layer)
+    def addColumns(self):
+        checkcol=iface.activeLayer()
+        colX=checkcol.fieldNameIndex('Wspol. X')
+        colY=checkcol.fieldNameIndex('Wspol. Y')
+        if colX==-1:
+            checkcol.startEditing()
+            checkcol.dataProvider().addAttributes([QgsField("Wspol. X", QVariant.Double), QgsField("Wspol. Y", QVariant.Double)])
+            checkcol.commitChanges()
+        cdt=checkcol.getFeatures()
+        feat=QgsFeature()
+        while cdt.nextFeature(feat):
+            (geomx,geomy)=feat.geometry().asPoint()
+            checkcol.startEditing()
+            colx=checkcol.fieldNameIndex('Wspol. X')
+            coly=checkcol.fieldNameIndex('Wspol. Y')
+            attrs={colx: geomx, coly: geomy}
+            checkcol.changeAttributeValue(feat.id(), colx, geomx)
+            checkcol.changeAttributeValue(feat.id(), coly, geomy)
+            checkcol.updateFields()
+            checkcol.commitChanges()
+
+    def fillFields(self):
+        checkcol=iface.activeLayer()
+        #[layer.name() for layer in QgsMapLayerR
+
+        cdt=checkcol.getFeatures()
+        feat=QgsFeature()
+        while cdt.nextFeature(feat):
+##        checkcol=iface.activeLayer()
+##        features=checkcol.getFeatures()
+##        feat=QgsFeature()
+##        while features.nextFeature(feat)
+            sciezka='D:/Krzysztof/Skrypty/testy/warstwa1/obiekt1/tekst.txt'
+            fotosciezka='D:/Krzysztof/Skrypty/testy/warstwa1/obiekt1/foto.jpg'
+            with open(sciezka) as file1:
+                text=file1.read()
+            colx=checkcol.fieldNameIndex("Tekst")
+            colfoto=checkcol.fieldNameIndex("Foto")
+            colcount=checkcol.fieldNameIndex("Count")
+            count=self.countFiles()
+            checkcol.startEditing()
+            checkcol.changeAttributeValue(feat.id(), colx, text)
+            checkcol.changeAttributeValue(feat.id(), colfoto, fotosciezka)
+            checkcol.changeAttributeValue(feat.id(), colcount, count)
+            checkcol.updateFields()
+            checkcol.commitChanges()
+    def countFiles(self):
+        sciezka='D:/Krzysztof/Skrypty/testy/warstwa1/obiekt1/count'
+        list_dir=[]
+        list_dir=os.listdir(sciezka)
+        count=0
+        for file in list_dir:
+            count+=1
+        return count
+        
+        
+    def export2file(self):
+        layers=QgsMapLayerRegistry.instance().mapLayers().values()
+        layerNumber=len(layers)
+        nr=1
+        data=[]
+        for layer in layers:
+            field_names = [field.name() for field in layer.pendingFields() ]
+            field_names.append('X')
+            field_names.append('Y')
+            tempList=["%s_%i"%(layer.name(),nr)]
+            tempListL=[]
+            nr+=1
+            for feat in layer.getFeatures():
+                tempListS=[]
+                (x,y)=feat.geometry().asPoint()
+                for f in feat:
+                    tempListS.append(f)
+                tempListS.append(x)
+                tempListS.append(y)
+                tempListL.append(tempListS)
+            tempList.append(tempListL)
+            data.append(tempList)
+##            print pprint(data)
+            
+        root=Element("Document")
+
+        for layer in data:
+            #Warstwa
+            folder=SubElement(root,"Folder")
+            fname=SubElement(folder,"name")
+            fname.text=layer[0]
+            
+            #Punkt
+            llayer=len(layer)
+            lfield_names=len(field_names)
+            
+##            pprint(layer)
+            for feat in layer:
+                if type(feat)==list:
+                    #print feat #co jesli warstwa jest pusta?
+                    for elem in feat:
+                        print elem
+                        placemark=SubElement(folder,"Placemark")
+##                        styleUrl=SubElement(placemark,"styleUrl")
+##                        styleUrl.text="#exampleBalloonStyle"
+                        extendedData=SubElement(placemark,"ExtendedData")
+                        schema=SubElement(extendedData,"SchemaData",{"schemaUrl":"#punkty"})
+                        f=0
+                        for i in (range(len(elem))):
+                            a1=SubElement(schema,"SimpleData",{"name":(field_names[i])})
+                            a1.text=str(elem[i])
+                            f+=1
+                        xp=elem[-2]
+                        yp=elem[-1]
+                        print xp,yp
+                        point=SubElement(placemark,"Point")
+                        coord=SubElement(point,"coordinates")
+                        coord.text="%f, %f"%(xp,yp)
+        schemaEnd=SubElement(root,"Schema",{"name":"punkty","id":"punkty"})
+        for i in range(len(field_names)):
+            a=SubElement(schemaEnd,"SimpleField",{"name":field_names[i], "type":"string"})
+        
+        str2=tostring(root)
+        pprint(str2)
+        sciezka="D:/Krzysztof/Skrypty/przykladowyml.kml"
+        firstline='<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2"> \n'
+        with open(sciezka,"w") as newfile:
+            newfile.write(firstline)
+        with open(sciezka,"a") as newfile:
+            newfile.write(str2)
+            newfile.write("</kml>")
+        
+    def unload(self):
+        """Removes the plugin menu item and icon from QGIS GUI."""
+        for action in self.actions:
+            self.iface.removePluginMenu(
+                self.tr(u'&Dodaj punkt'),
+                action)
+            self.iface.removeToolBarIcon(action)
+        # remove the toolbar
+        del self.toolbar
+
+
+    def run(self):
+        """Run method that performs all the real work"""
+        # show the dialog
+        self.dlg.show()
+        # Run the dialog event loop
+        result = self.dlg.exec_()
+        # See if OK was pressed
+        if result:
+            #Check the number of layers
+            canvas=iface.mapCanvas().layerCount()
+            if canvas ==0:
+                self.insertLayer()
+            self.canvas.setMapTool(self.clickTool)
