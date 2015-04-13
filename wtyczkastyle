@@ -1,0 +1,811 @@
+# -*- coding: utf-8 -*-
+"""
+/***************************************************************************
+ Dodajpunt
+                                 A QGIS plugin
+ Dodaje punkt do warstwy
+                              -------------------
+        begin                : 2015-03-24
+        git sha              : $Format:%H$
+        copyright            : (C) 2015 by Wrogeo
+        email                : wro@geo.pl
+ ***************************************************************************/
+
+/***************************************************************************
+ *                                                                         *
+ *   This program is free software; you can redistribute it and/or modify  *
+ *   it under the terms of the GNU General Public License as published by  *
+ *   the Free Software Foundation; either version 2 of the License, or     *
+ *   (at your option) any later version.                                   *
+ *                                                                         *
+ ***************************************************************************/
+"""
+from PyQt4.QtCore import *
+from PyQt4.QtGui import *
+# Initialize Qt resources from file resources.py
+import resources_rc
+# Import the code for the dialog
+from dodaj_punkt_dialog import DodajpuntDialog
+from add_point import MyForm
+import os.path
+from qgis.core import *
+from qgis.gui import *
+from qgis.utils import *
+import os
+from xml.etree.ElementTree import Element,SubElement, Comment, tostring
+
+class Dodajpunt:
+    """QGIS Plugin Implementation."""
+
+    def __init__(self, iface):
+        """Constructor.
+
+        :param iface: An interface instance that will be passed to this class
+            which provides the hook by which you can manipulate the QGIS
+            application at run time.
+        :type iface: QgsInterface
+        """
+        # Save reference to the QGIS interface
+        self.iface = iface
+        # initialize plugin directory
+        self.plugin_dir = os.path.dirname(__file__)
+        # initialize locale
+        locale = QSettings().value('locale/userLocale')[0:2]
+        locale_path = os.path.join(
+            self.plugin_dir,
+            'i18n',
+            'Dodajpunt_{}.qm'.format(locale))
+
+        if os.path.exists(locale_path):
+            self.translator = QTranslator()
+            self.translator.load(locale_path)
+
+            if qVersion() > '4.3.3':
+                QCoreApplication.installTranslator(self.translator)
+
+        # Create the dialog (after translation) and keep reference
+        self.dlg = DodajpuntDialog()
+        self.addPointDlg=MyForm()
+
+        # Declare instance attributes
+        self.actions = []
+        self.menu = self.tr(u'&Dodaj punkt')
+        # TODO: We are going to let the user set this up in a future iteration
+        self.toolbar = self.iface.addToolBar(u'Dodajpunt')
+        self.toolbar.setObjectName(u'Dodajpunt')
+        #Set the signals
+        self.canvas=self.iface.mapCanvas()
+        self.clickTool=QgsMapToolEmitPoint(self.canvas)
+##        self.insertLayer()
+##        print "wartstwa dodana"
+
+    # noinspection PyMethodMayBeStatic
+    def tr(self, message):
+        """Get the translation for a string using Qt translation API.
+
+        We implement this ourselves since we do not inherit QObject.
+
+        :param message: String for translation.
+        :type message: str, QString
+
+        :returns: Translated version of message.
+        :rtype: QString
+        """
+        # noinspection PyTypeChecker,PyArgumentList,PyCallByClass
+        return QCoreApplication.translate('Dodajpunt', message)
+
+
+    def add_action(
+        self,
+        icon_path,
+        text,
+        callback,
+        enabled_flag=True,
+        add_to_menu=True,
+        add_to_toolbar=True,
+        status_tip=None,
+        whats_this=None,
+        parent=None):
+        """Add a toolbar icon to the toolbar.
+
+        :param icon_path: Path to the icon for this action. Can be a resource
+            path (e.g. ':/plugins/foo/bar.png') or a normal file system path.
+        :type icon_path: str
+
+        :param text: Text that should be shown in menu items for this action.
+        :type text: str
+
+        :param callback: Function to be called when the action is triggered.
+        :type callback: function
+
+        :param enabled_flag: A flag indicating if the action should be enabled
+            by default. Defaults to True.
+        :type enabled_flag: bool
+
+        :param add_to_menu: Flag indicating whether the action should also
+            be added to the menu. Defaults to True.
+        :type add_to_menu: bool
+
+        :param add_to_toolbar: Flag indicating whether the action should also
+            be added to the toolbar. Defaults to True.
+        :type add_to_toolbar: bool
+
+        :param status_tip: Optional text to show in a popup when mouse pointer
+            hovers over the action.
+        :type status_tip: str
+
+        :param parent: Parent widget for the new action. Defaults None.
+        :type parent: QWidget
+
+        :param whats_this: Optional text to show in the status bar when the
+            mouse pointer hovers over the action.
+
+        :returns: The action that was created. Note that the action is also
+            added to self.actions list.
+        :rtype: QAction
+        """
+
+        icon = QIcon(icon_path)
+        action = QAction(icon, text, parent)
+        action.triggered.connect(callback)
+        action.setEnabled(enabled_flag)
+
+        if status_tip is not None:
+            action.setStatusTip(status_tip)
+
+        if whats_this is not None:
+            action.setWhatsThis(whats_this)
+
+        if add_to_toolbar:
+            self.toolbar.addAction(action)
+
+        if add_to_menu:
+            self.iface.addPluginToMenu(
+                self.menu,
+                action)
+
+        self.actions.append(action)
+
+        return action
+
+    def initGui(self):
+        """Create the menu entries and toolbar icons inside the QGIS GUI."""
+
+        icon_path = ':/plugins/Dodajpunt/icon.png'
+        self.add_action(
+            icon_path,
+            text=self.tr(u'Dodaje punkt do warstwy'),
+            callback=self.run,
+            parent=self.iface.mainWindow())
+        result=QObject.connect(self.clickTool,SIGNAL("canvasClicked(const QgsPoint &,Qt::MouseButton)"),self.handleMouseDown)
+        dpunkt=self.dlg.pushButton
+        dpunkt.clicked.connect(self.insertPoint)
+        addlayer=self.dlg.pushButton_3
+        addlayer.clicked.connect(self.insertLayer)
+        addcolumn=self.dlg.pushButton_2
+        addcolumn.clicked.connect(self.addColumns)
+        export2files=self.dlg.pushButton_4
+        export2files.clicked.connect(self.export2file)
+        #QMessageBox.information(self.iface.mainWindow(),"Info","connect=%s"%str(result))
+        importfromfile=self.dlg.pushButton_5
+        importfromfile.clicked.connect(self.importfromfile)
+        getFilePath=self.dlg.pushButton_6
+        getFilePath.clicked.connect(self.getFilePath)
+        savePath=self.dlg.pushButton_7
+        savePath.clicked.connect(self.savePath)
+        drawLine=self.dlg.pushButton_8
+        drawLine.clicked.connect(self.drawLine)
+        drawPolygon=self.dlg.pushButton_9
+        drawPolygon.clicked.connect(self.drawPolygon)
+        createBuffer=self.dlg.pushButton_10
+        createBuffer.clicked.connect(self.createBuffer)
+        importDataMetadata=self.dlg.pushButton_11
+        importDataMetadata.clicked.connect(self.importDataMetadata)
+
+        self.addPointCheck=self.dlg.checkBox
+
+        
+        
+    def handleMouseDown(self,point,button):
+        self.lex=self.dlg.lineEdit
+        self.ley=self.dlg.lineEdit_2
+        self.lex.clear()
+        self.ley.clear()
+        QMessageBox.information(self.iface.mainWindow(),"Info","X,Y=%s, %s"%(str(point.x()),str(point.y())))
+        if self.addPointCheck.isChecked():
+            self.addPointDlg.show()
+        self.lex.setText('%s'%(str(point.x())))
+        self.ley.setText('%s'%(str(point.y())))
+    def insertPoint(self,point):
+        #Declare variable/scopes
+        a1=self.dlg.lineEdit_3.text()
+        a2=self.dlg.lineEdit_4.text()
+        a3=self.dlg.lineEdit_5.text()
+        a4=self.dlg.lineEdit_6.text()
+        geom=QgsPoint(float(self.lex.text()),float(self.ley.text()))
+        #Commit action
+        alayer=iface.activeLayer()
+        alayer.startEditing()
+        punkt=QgsFeature()
+        punkt.setGeometry(QgsGeometry.fromPoint(geom))
+        atributtes=[a1,a2,a3,a4,None,None, None]
+        punkt.setAttributes(atributtes)
+        alayer.addFeature(punkt,True)
+        alayer.commitChanges()
+        QMessageBox.information(self.iface.mainWindow(),"Informacja","Dodano punkt")
+        self.fillFields()
+        iface.mapCanvas().refresh()
+    def insertLayer(self):
+        try:
+            self.ilayer
+            name=self.ilayer
+            
+        except:
+            name="Punkty"
+        
+        layer=QgsVectorLayer("Point?crs=epsg:4326",name,"memory")
+	layer.startEditing()
+	layer.LayerData=layer.dataProvider()
+	layer.LayerData.addAttributes([QgsField("Atrybut1", QVariant.String), QgsField("Atrybut2", QVariant.String), QgsField("Atrybut3", QVariant.String), QgsField("Atrybut4", QVariant.String),QgsField("Tekst", QVariant.String), QgsField("Foto", QVariant.String), QgsField("Count", QVariant.String)])#
+	layer.commitChanges()
+        QgsMapLayerRegistry.instance().addMapLayer(layer)
+    def addColumns(self):
+        checkcol=iface.activeLayer()
+        colX=checkcol.fieldNameIndex('Wspol. X')
+        colY=checkcol.fieldNameIndex('Wspol. Y')
+        if colX==-1:
+            checkcol.startEditing()
+            checkcol.dataProvider().addAttributes([QgsField("Wspol. X", QVariant.Double), QgsField("Wspol. Y", QVariant.Double)])
+            checkcol.commitChanges()
+        cdt=checkcol.getFeatures()
+        feat=QgsFeature()
+        while cdt.nextFeature(feat):
+            (geomx,geomy)=feat.geometry().asPoint()
+            checkcol.startEditing()
+            colx=checkcol.fieldNameIndex('Wspol. X')
+            coly=checkcol.fieldNameIndex('Wspol. Y')
+            attrs={colx: geomx, coly: geomy}
+            checkcol.changeAttributeValue(feat.id(), colx, geomx)
+            checkcol.changeAttributeValue(feat.id(), coly, geomy)
+            checkcol.updateFields()
+            checkcol.commitChanges()
+
+    def fillFields(self):
+        checkcol=iface.activeLayer()
+        cdt=checkcol.getFeatures()
+        feat=QgsFeature()
+        while cdt.nextFeature(feat):
+##        checkcol=iface.activeLayer()
+##        features=checkcol.getFeatures()
+##        feat=QgsFeature()
+##        while features.nextFeature(feat)
+            sciezka='D:/Krzysztof/Skrypty/testy/warstwa1/obiekt1/tekst.txt'
+            fotosciezka='D:/Krzysztof/Skrypty/testy/warstwa1/obiekt1/foto.jpg'
+            with open(sciezka) as file1:
+                text=file1.read()
+            colx=checkcol.fieldNameIndex("Tekst")
+            colfoto=checkcol.fieldNameIndex("Foto")
+            colcount=checkcol.fieldNameIndex("Count")
+            count=self.countFiles()
+            checkcol.startEditing()
+            checkcol.changeAttributeValue(feat.id(), colx, text)
+            checkcol.changeAttributeValue(feat.id(), colfoto, fotosciezka)
+            checkcol.changeAttributeValue(feat.id(), colcount, count)
+            checkcol.updateFields()
+            checkcol.commitChanges()
+    def countFiles(self):
+        list_dir=[]
+        list_dir=os.listdir(self.countfile)
+        count=0
+        for file in list_dir:
+            count+=1
+        return count
+        
+        
+    def export2file(self):    
+        root=Element("Document")
+        nstyl=SubElement(root,"Style", {"id":"balony"})
+        balony=SubElement(nstyl,"BalloonStyle")
+        iconstyle=SubElement(nstyl,"IconStyle")
+        icon=SubElement(iconstyle,"Icon")
+        iconsize=SubElement(iconstyle,"scale")
+        iconsize.text="2"
+        iconheading=SubElement(iconstyle,"heading")
+        iconheading.text="90"
+        iconlink=SubElement(icon,"href")
+        iconlink.text="http://www.northgates.ca/earthplugin/images/pin48.png"
+        balonytext=SubElement(balony,"text")
+        balonytext.text="""<![CDATA[
+                            <h2>Obiekt</h2>
+                            <img src=file:///$[Foto] style="border-top: 0px solid; height: 204px; border-right: 0px solid; width: 287px; border-bottom: 0px solid; border-left: 0px solid"/><br><br>
+                            <table border="1" cellpadding="2" cellspacing="0" style="width: 443px">
+		<tbody>
+			<tr>
+				<td style="width: 186px">
+					<b>Nazwa warstwy</b></td>
+				<td style="width: 248px; color: #003366">
+					$[description]</td>
+			</tr>
+			<tr>
+				<td style="width: 186px">
+					<b>Nazwa obiektu</b></td>
+				<td style="width: 248px; color: #003366">
+					$[name]</td>
+			</tr>
+			<tr>
+				<td style="width: 186px">
+					<strong>Lokalizacja</strong></td>
+				<td style="width: 248px; color: #003366">
+					$[X], $[Y]</td>
+			</tr>
+			<tr>
+				<td style="width: 186px">
+					<strong>Atrybut1</strong></td>
+				<td style="width: 248px; color: #003366">
+					$[Atrybut1]</td>
+			</tr>
+			<tr>
+				<td style="width: 186px">
+					<strong>Atrybut2</strong></td>
+				<td style="width: 248px; color: #003366">
+					$[Atrybut2]</td>
+			</tr>
+			<tr>
+				<td style="width: 186px">
+					<strong>Atrybut3</strong></td>
+				<td style="width: 248px; color: #003366">
+					$[Atrybut3]</td>
+			</tr>
+			<tr>
+				<td style="width: 186px">
+					<strong>Atrybut4</strong></td>
+				<td style="width: 248px; color: #003366">
+					$[Atrybut4]</td>
+			</tr>
+			<tr>
+				<td style="width: 186px">
+					<strong>Liczba plikow</strong></td>
+				<td style="width: 248px; color: #003366">
+					$[Count]</td>
+			</tr>
+			<tr>
+				<td style="width: 186px">
+					<strong>Sciezka do fotografii</strong></td>
+				<td style="width: 248px; color: #003366">
+					$[Foto]</td>
+			</tr>
+			<tr>
+				<td style="width: 186px">
+					<b>Zawartosc pliku tekst</b></td>
+				<td style="width: 248px; color: #003366">
+					$[Tekst]</td>
+			</tr>
+
+		</tbody>
+	</table>
+                            $[geDirections]<br>
+
+                            
+                        """
+        layers=QgsMapLayerRegistry.instance().mapLayers().values()
+        layerNumber=len(layers)
+        nr=1
+        
+        for layer in layers:
+            geomType=layer.geometryType()
+            data=[]
+            if geomType==0: ##PUNKTY
+                field_names = [field.name() for field in layer.pendingFields() ]
+                tempList=["%s"%(layer.name())]
+                field_names.append('X')
+                field_names.append('Y')
+                tempListL=[]
+                nr+=1
+                for feat in layer.getFeatures():
+                    tempListS=[]
+                    (x,y)=feat.geometry().asPoint()
+                    for f in feat:
+                        tempListS.append(f)
+                    tempListS.append(x)
+                    tempListS.append(y)
+                    tempListL.append(tempListS)
+                tempList.append(tempListL)
+                data.append(tempList)
+                for layer in data:
+                    #Warstwa
+                    folder=SubElement(root,"Folder")
+                    fname=SubElement(folder,"name")
+                    fname.text=layer[0]
+                  
+                    
+                    #Punkt
+                    llayer=len(layer)
+                    lfield_names=len(field_names)
+                    
+        ##            pprint(layer)
+                    for feat in layer:
+                        if type(feat)==list:
+                            n=1
+                            for elem in feat:
+                                placemark=SubElement(folder,"Placemark")
+                                styleUrl=SubElement(placemark,"styleUrl")
+                                styleUrl.text="#balony"
+                                oblayer=SubElement(placemark,"name")
+                                oblayer.text="Obiekt%i, %s"%(n,layer[0])
+                                description=SubElement(placemark,"description")
+                                description.text=layer[0]
+                                extendedData=SubElement(placemark,"ExtendedData")
+        ##                        schema=SubElement(extendedData,"SchemaData",{"schemaUrl":"#punkty"})
+                                f=0
+                                for i in (range(len(elem))):
+                                    a=SubElement(extendedData,"Data",{"name":(field_names[i])})
+                                    a1=SubElement(a,"value")
+                                    a1.text=str(elem[i])
+                                    f+=1
+                                xp=float(elem[-2])
+                                yp=float(elem[-1])
+                                point=SubElement(placemark,"Point")
+                                coord=SubElement(point,"coordinates")
+                                coord.text="%f, %f"%(xp,yp)
+                                n+=1
+
+
+                                
+            elif geomType==1: ##LINIE
+                field_names = [field.name() for field in layer.pendingFields() ]
+                tempList=["%s"%(layer.name())]
+                tempListL=[]
+                nr+=1
+                for feat in layer.getFeatures():
+                    tempListS=[]
+                    for elem in feat:
+                        tempListS.append(elem)
+                    geom=feat.geometry().asPolyline()
+                    tempListS.append(geom)
+                    tempListL.append(tempListS)
+                tempList.append(tempListL)
+                data.append(tempList)
+                for layer in data:
+                    folder=SubElement(root,"Folder")
+                    fname=SubElement(folder,"name")
+                    fname.text=layer[0]
+                    for feat in layer:
+                        if type(feat)==list:
+                            n=1
+                            for elem in feat:
+                                placemark=SubElement(folder,"Placemark")
+                                oblayer=SubElement(placemark,"name")
+                                oblayer.text="Obiekt%i, %s"%(n,layer[0])
+                                description=SubElement(placemark,"description")
+                                description.text=layer[0]
+                                extendedData=SubElement(placemark,"ExtendedData")
+                                f=0
+                                for i in (range(len(field_names))):
+                                    a=SubElement(extendedData,"Data",{"name":(field_names[i])})
+                                    a1=SubElement(a,"value")
+                                    a1.text=str(elem[i])
+                                    f+=1
+                                    print str(elem[i])
+                                lineCoord=[]
+                                for point in elem[1]:
+                                    (x,y)=point
+                                    pline="%s,%s"%(str(x),str(y))
+                                    lineCoord.append(pline)
+                                    
+                                line=SubElement(placemark,"LineString")
+                                coord=SubElement(line,"coordinates")
+                                coord.text=" ".join(lineCoord)
+                                
+
+##                            
+                      
+            elif geomType==2: ##POLIGONY
+                field_names = [field.name() for field in layer.pendingFields() ]
+                tempList=["%s"%(layer.name())]
+                tempListL=[]
+                nr+=1
+                for feat in layer.getFeatures():
+                    tempListS=[]
+                    for elem in feat:
+                        tempListS.append(elem)
+                    geom=feat.geometry().asPolygon()
+                    tempListS.append(geom)
+                    tempListL.append(tempListS)
+                tempList.append(tempListL)
+                data.append(tempList)
+                print data
+                for layer in data:
+                    folder=SubElement(root,"Folder")
+                    fname=SubElement(folder,"name")
+                    fname.text=layer[0]
+                    for feat in layer:
+                        if type(feat)==list:
+                            n=1
+                            for elem in feat:
+                                placemark=SubElement(folder,"Placemark")
+                                oblayer=SubElement(placemark,"name")
+                                oblayer.text="Obiekt%i, %s"%(n,layer[0])
+                                description=SubElement(placemark,"description")
+                                description.text=layer[0]
+                                extendedData=SubElement(placemark,"ExtendedData")
+                                f=0
+                                for i in (range(len(field_names))):
+                                    a=SubElement(extendedData,"Data",{"name":(field_names[i])})
+                                    a1=SubElement(a,"value")
+                                    a1.text=str(elem[i])
+                                    f+=1
+                                    print str(elem[i])
+                                polyCoord=[]
+                                for point in elem[1]:
+                                    for p in point:
+                                        print p
+                                        (x,y)=p
+                                        pline="%s,%s"%(str(x),str(y))
+                                        polyCoord.append(pline)
+                                    
+                                polygon=SubElement(placemark,"Polygon")
+                                outer=SubElement(polygon,"outerBoundaryIs")
+                                linearring=SubElement(outer,"LinearRing")
+                                coord=SubElement(linearring,"coordinates")
+                                coord.text=" ".join(polyCoord)
+                
+        str2=tostring(root)
+        print str2
+        try:
+            self.saveFilePath
+            sciezka=self.saveFilePath
+        except:
+            sciezka="D:/Krzysztof/Skrypty/pr1zykladowyml.kml"
+            
+        firstline='<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2"> \n'
+        with open(sciezka,"w") as newfile:
+            newfile.write(firstline)
+        with open(sciezka,"a") as newfile:
+            newfile.write(str2)
+            newfile.write("</kml>")
+            
+    def importfromfile(self):
+        pathdir=self.sciezka
+        layerList=os.listdir(pathdir)
+        buffer1=[]
+        for ilayer in layerList:
+            filespath=pathdir+'/'+ilayer
+            filesPath=os.listdir(filespath)
+            self.ilayer=ilayer
+            nlayer=self.insertLayer()
+            iface.setActiveLayer(nlayer)
+            for idir in filesPath:
+                pathFileInit=filespath+'/'+idir
+                txtfile="tekst.txt"
+                fotofile=pathFileInit+"/foto.jpg"
+                self.countfile=pathFileInit+'/count'
+                count=self.countFiles()
+                pathFile=pathFileInit+'/'+txtfile
+                
+                if os.path.exists(pathFile):
+                    with open(pathFile,'r') as nfile:
+                        tekst=nfile.readlines()
+                        tempList=[]
+                        for i in tekst:
+                            tempList.append(i)
+                        coordList=tempList[1].split()
+                        
+
+                        coord=[]
+                        for co in coordList:
+                            i=float(co)
+                            coord.append(i)
+                        alayer=iface.activeLayer()
+                        Lng=coord[0]
+                        Lat=coord[1]
+                        attr=['','','','',tempList[0],fotofile,count]
+                        npoint=QgsFeature()
+                        npoint.setGeometry(QgsGeometry.fromPoint(QgsPoint(Lng,Lat)))
+                        npoint.setAttributes(attr)
+                        alayer.startEditing()
+                        alayer.addFeature(npoint,True)
+                        alayer.commitChanges()
+                        iface.mapCanvas().refresh()
+
+                        ##pobranie danych do elipsy
+                        try:
+                            tempList[2]
+                            buffer1.append([ilayer, Lng, Lat, tempList[2]])
+                        except:
+                            pass
+        print buffer1
+        self.buffer=buffer1
+        return self.buffer
+                        
+    def getFilePath(self):
+        lineEdit=self.dlg.lineEdit_7
+        lineEdit.setText(QFileDialog.getExistingDirectory())
+        self.sciezka=lineEdit.text()
+        return self.sciezka
+    
+    def savePath(self):
+        lineEdit=self.dlg.lineEdit_8
+        lineEdit.setText(QFileDialog.getSaveFileName())
+        tekst=lineEdit.text()
+        if tekst[-4:]!=".kml":
+            lineEdit.setText(tekst+".kml")
+        self.saveFilePath=lineEdit.text()
+        return self.saveFilePath
+
+    def drawLine(self):
+        alayer=iface.activeLayer()
+        alayerName=alayer.name()
+        name="Linia "+alayerName
+        nlayer=QgsVectorLayer("Linestring?crs=epsg:4326",name,"memory")
+        nlayer.startEditing()
+	nlayer.layerData=nlayer.dataProvider()
+	nlayer.layerData.addAttributes([QgsField("Atrybut1", QVariant.String)])#
+	nlayer.commitChanges()
+        QgsMapLayerRegistry.instance().addMapLayer(nlayer)
+        tempGeom=[]
+        for feat in alayer.getFeatures():
+            tempGeom.append(feat.geometry().asPoint())
+        qLine=QgsGeometry.fromPolyline(tempGeom)
+        valLine=["proba"]
+        nLine=QgsFeature()
+        nLine.setGeometry(qLine)
+        nLine.setAttributes(valLine)
+        nlayer.startEditing()
+        nlayer.addFeature(nLine,True)
+        nlayer.commitChanges()
+        iface.mapCanvas().refresh()
+            
+        
+    def drawPolygon(self):
+        try:
+            alayer=iface.activeLayer()
+            alayerName=alayer.name()
+            name="Poligon "+alayerName
+            nlayer=QgsVectorLayer("polygon?crs=epsg:4326",name,"memory")
+            nlayer.startEditing()
+            nlayer.layerData=nlayer.dataProvider()
+            nlayer.layerData.addAttributes([QgsField("Atrybut1", QVariant.String)])#
+            nlayer.commitChanges()
+            QgsMapLayerRegistry.instance().addMapLayer(nlayer)
+            tempGeom=[]
+            for feat in alayer.getFeatures():
+                tempGeom.append(feat.geometry().asPoint())
+            tempPoints=[]
+            for i in tempGeom:
+                p=QgsPoint(i)
+                tempPoints.append(p)
+            qLine=QgsGeometry.fromPolygon([tempPoints])
+    ##        qLine = QgsGeometry.fromPolygon([[QgsPoint(1, 1), QgsPoint(2, 2), QgsPoint(2, 1)]])
+            valLine=["proba"]
+            nLine=QgsFeature()
+            nLine.setGeometry(qLine)
+            nLine.setAttributes(valLine)
+            nlayer.startEditing()
+            nlayer.addFeature(nLine,True)
+            nlayer.commitChanges()
+            iface.mapCanvas().refresh()
+        except:
+            QMessageBox.critical(self.iface.mainWindow(),"Blad","Czyz poligon nie powinien miec wiecej niz 2 punkty?")
+
+    def createBuffer(self):
+        alayer=iface.activeLayer()
+        alayerName=alayer.name()
+        
+            
+        name="Bufor "+alayerName
+        nlayer=QgsVectorLayer("polygon?crs=epsg:4326",name,"memory")
+        nlayer.startEditing()
+	nlayer.layerData=nlayer.dataProvider()
+	nlayer.layerData.addAttributes([QgsField("Atrybut1", QVariant.String)])#
+	nlayer.commitChanges()
+        QgsMapLayerRegistry.instance().addMapLayer(nlayer)
+        tempGeom=[]
+        for i in self.buffer:
+            if alayerName==i[0]:
+                feat=QgsFeature()
+                feat.setGeometry(QgsGeometry.fromPoint(QgsPoint(i[1],i[2])))
+                d=float(i[3])
+                print feat.geometry().asPoint()
+                b=feat.geometry().buffer(d,30)
+                nBuffer=QgsFeature()
+                nBuffer.setGeometry(b)
+                valBuffer=["proba"]
+                nBuffer.setAttributes(valBuffer)
+                nlayer.startEditing()
+                nlayer.addFeature(nBuffer,True)
+                nlayer.commitChanges()
+            else:
+                for feat in alayer.getFeatures():
+                    b=feat.geometry().buffer(0.05,30)
+                    nBuffer=QgsFeature()
+                    nBuffer.setGeometry(b)
+                    valBuffer=["proba"]
+                    nBuffer.setAttributes(valBuffer)
+                    nlayer.startEditing()
+                    nlayer.addFeature(nBuffer,True)
+                    nlayer.commitChanges()
+        iface.mapCanvas().refresh()
+    def importDataMetadata(self):
+        pathdir=self.sciezka
+        layerList=os.listdir(pathdir)
+        buffer1=[]
+        for ilayer in layerList:
+            filespath=pathdir+'/'+ilayer
+            filesPath=os.listdir(filespath)
+            self.ilayer=ilayer
+            nlayer=self.insertLayer()
+            iface.setActiveLayer(nlayer)
+            for idir in filesPath:
+                pathFileInit=filespath+'/'+idir
+                txtfile="tekst.txt"
+                fotofile=pathFileInit+"/foto.jpg"
+                self.countfile=pathFileInit+'/count'
+                count=self.countFiles()
+                pathFile=pathFileInit+'/'+txtfile
+                
+                if os.path.exists(pathFile):
+                    with open(pathFile,'r') as nfile:
+                        tekst=nfile.readlines()
+                    for line in tekst:
+                        part=line.split()
+                        try:
+                            opis=part[0]+" "+part[1]
+                            if opis=="Kod obiektu:":
+                                kod_obiektu=part[2:]
+                            elif opis=="Blad polozenia:":
+                                blad=part[2:]
+                                blad_polozenia=float(blad[0])
+                            else:
+                                wspolrzedne=part[1:]
+                                wspl=[]
+                        except:
+                            continue
+            for i in wspolrzedne:
+                wspl.append(float(i))
+            kod_obiektu_str=' '.join(kod_obiektu)
+            alayer=iface.activeLayer()
+            Lng=wspl[0]
+            Lat=wspl[1]
+            attr=['','','','',kod_obiektu_str,fotofile,count]
+            npoint=QgsFeature()
+            npoint.setGeometry(QgsGeometry.fromPoint(QgsPoint(Lng,Lat)))
+            npoint.setAttributes(attr)
+            alayer.startEditing()
+            alayer.addFeature(npoint,True)
+            alayer.commitChanges()
+            iface.mapCanvas().refresh()
+
+                        ##pobranie danych do elipsy
+            try:
+                buffer1.append([ilayer, Lng, Lat, blad_polozenia])
+            except:
+                pass
+            self.buffer=buffer1
+            return self.buffer
+
+        
+        
+    def unload(self):
+        """Removes the plugin menu item and icon from QGIS GUI."""
+        for action in self.actions:
+            self.iface.removePluginMenu(
+                self.tr(u'&Dodaj punkt'),
+                action)
+            self.iface.removeToolBarIcon(action)
+        # remove the toolbar
+        del self.toolbar
+
+
+    def run(self):
+        """Run method that performs all the real work"""
+        # show the dialog
+        self.dlg.show()
+        # Run the dialog event loop
+        result = self.dlg.exec_()
+        # See if OK was pressed
+        if result:
+            #Check the number of layers
+            canvas=iface.mapCanvas().layerCount()
+            if canvas ==0:
+                self.insertLayer()
+            self.canvas.setMapTool(self.clickTool)
