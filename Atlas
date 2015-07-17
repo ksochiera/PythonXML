@@ -1,0 +1,54 @@
+#mapredering 4 - mapcomposer
+from PyQt4.QtCore import *
+from PyQt4.QtGui import *
+from PyQt4.QtXml import QDomDocument
+from qgis.core import *
+from qgis.gui import *
+from qgis.utils import *
+
+##Load a template
+myFile2 = 'C://Users//maria//.qgis2//composer_templates//atlas16.qpt'
+myTemplateFile = file(myFile2, 'rt')
+myTemplateContent = myTemplateFile.read()
+myTemplateFile.close()
+myDocument = QDomDocument()
+myDocument.setContent(myTemplateContent)
+
+#Set active layer
+alayer=iface.activeLayer()
+
+#Create new composition
+ms=canvas.mapSettings()
+mComposition = QgsComposition(ms)
+mComposition.setPlotStyle(QgsComposition.Print)
+mComposition.loadFromTemplate(myDocument)
+
+
+# Create the atlas map (QgsComposerMap)
+x, y = 0, 0
+w, h = mComposition.paperWidth(), mComposition.paperHeight()
+mAtlasMap = QgsComposerMap(mComposition, x,y,w,h)
+mAtlasMap.setAtlasDriven(True)
+mAtlasMap.setFrameEnabled(False)
+mAtlasMap.setAtlasFixedScale(True)
+mComposition.getComposerMapById(0)
+mAtlas = mComposition.atlasComposition()
+mAtlas.setCoverageLayer(alayer)
+mAtlas.setEnabled(True)
+mComposition.setAtlasMode(QgsComposition.ExportAtlas)
+mAtlasMap.setAtlasDriven(True)
+mAtlasMap.setAtlasMargin(0.01)
+mAtlasMap.setAtlasScalingMode(QgsComposerMap.Fixed)
+
+mAtlas.beginRender()
+for i in range(0, mAtlas.numFeatures()):
+    mAtlas.prepareForFeature(i)
+    jobs="D://"
+    output_jpeg = jobs + str(i)+ "_Atlas.jpg"
+    myImage = mComposition.printPageAsRaster(0)
+    myImage.save(output_jpeg)
+    print "OK!"
+mAtlas.endRender()
+mAtlasMap.setAtlasDriven(False)
+mAtlasMap.setAtlasScalingMode(QgsComposerMap.Fixed)
+mAtlasMap.setAtlasMargin(0)
